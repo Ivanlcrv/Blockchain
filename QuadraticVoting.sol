@@ -7,41 +7,44 @@ import "contracts/TokenManager.sol";
 contract QuadraticVoting {
     
     address owner;
-    uint budget;
-    uint price;
-    uint max_tokens;
+    uint256 budget;
+    uint256 price;
+    uint256 max_tokens;
+    uint256 lastId;
     bool is_open;
-    uint lastId;
 
     TokenManager tm;
 
+    
     struct proposal {
         string title;
         string description;
-        uint proposal_budget;
+        uint256 proposal_budget;
+        uint256 num_tokens;
         address proposal_address;
         address creator;
         bool is_signaling;
         bool approved;
+        address[] voters;
     }
 
     struct Paticipant {
-        uint tokens;
-        bool exist;
+        uint256 tokens;
+        mapping (uint256 => uint256) votes;
     }
 
-    mapping (address => address) proposals_aux;//revisar
-    mapping (address => address) participants;
-    mapping (uint => proposal) proposals;
-    uint [] array_proposals;
+    mapping (address => uint256) proposals_aux;//revisar
+    mapping (address => Paticipant) participants;
+    mapping (uint256 => proposal) proposals;
+    uint256 [] array_proposals;
 
-    constructor (uint _price, uint _max_tokens) {
+    constructor (uint256 _price, uint256 _max_tokens) {
         owner = msg.sender;
         price = _price;
         max_tokens = _max_tokens;
         is_open = false;
-        lastId = 0;
-        tm = new TokenManager());//revisar
+        lastId = 1;
+        tm = new TokenManager();//revisar
     }
    
     modifier isOwnerContract{
@@ -54,18 +57,18 @@ contract QuadraticVoting {
         _;
     }
 
-    modifier isApproved(uint id){
+    modifier isApproved(uint256 id){
         require (!proposals[id].approved, "The proposal has been approved");
         _;
     }
 
-    modifier proposalCreater(uint id){
+    modifier proposalCreater(uint256 id){
         require (proposals[id].creator==msg.sender, "You are not the creater of this proposal");
         _;
     }
 
     modifier registeredParticipant {
-        require (participants[msg.sender] != address(0), "You are not register as participant");
+        require (participants[msg.sender].tokens >= 0, "You are not register as participant");
         _;
     }
 
@@ -77,38 +80,64 @@ contract QuadraticVoting {
 
     function addParticipant() external payable {
         //revisar
-        require(!participants[msg.sender].tokens != 0, "Participant already exist");
-        uint tokens = msg.value/price;
+        require(participants[msg.sender].tokens == 0, "Participant already exist");
+        uint256 tokens = msg.value/price;
         //revisar estas dos lineas
         require(tokens <= max_tokens);
         max_tokens -= tokens;
         //
         tm.mint(msg.sender, tokens);
-        participants[msg.sender] = Paticipant(tokens, true); //revisar
+        participants[msg.sender].tokens = tokens; //revisar
     }
 
     function removeParticipant() external {
-        participants[msg.sender] = address(0);
+        uint256 tokens = participants[msg.sender].tokens;
+        tm.burn(tokens);
+        participants[msg.sender].tokens = 0; //revisar    
+        payable(address(this)).transfer(tokens*price);
     }
 
-    function addProposal(string memory title, string memory description, uint proposal_budget, address a) external isOpen returns (uint){
-        require (proposals_aux[a] == address(0), "This proposal already exists");
-        proposals[lastId] = proposal (title, description, proposal_budget, a, msg.sender, (proposal_budget==0 ? false : true), false);
-        proposals_aux[a] = a;
+    function addProposal(string memory title, string memory description, uint256 proposal_budget, address a) external isOpen returns (uint){
+        require (proposals_aux[a] == 0, "This proposal already exists");
+        proposals[lastId].title = title;
+        proposals[lastId].description = description;
+        proposals[lastId].proposal_budget = proposal_budget;
+        proposals[lastId].num_tokens = 0;
+        proposals[lastId].proposal_address = a;
+        proposals[lastId].creator = msg.sender;
+        proposals[lastId].is_signaling = (proposal_budget==0 ? false : true);
+        proposals[lastId].approved = false;
+        proposals_aux[a] = lastId;
         array_proposals.push(lastId);
         return lastId++;
     }
     
-    function cancelProposal (uint id) external isOpen isApproved(id) {
-        //devolver tokens
+    function cancelProposal (uint256 id) external isOpen isApproved(id) {
+        for(uint i = 0; i < proposals[id].voters.length; i++){
+            uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
+            tm.transferFrom(address(this), msg.sender, tokens);
+            participants[msg.sender].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
+            participants[msg.sender].tokens += tokens;
+            proposals[id].num_tokens -= tokens;
+        }
     }
 
-    function buyTokens() external registeredParticipant {
-        //completar
+    function buyTokens() external payable registeredParticipant {
+        uint256 tokens = msg.value/price;
+        //revisar estas dos lineas
+        require(tokens <= max_tokens);
+        max_tokens -= tokens;
+        //
+        tm.mint(msg.sender, tokens);
+        participants[msg.sender].tokens += tokens; //revisar
     }
 
     function sellTokens() external registeredParticipant {
-        //completar
+        uint256 tokens = participants[msg.sender].tokens;
+        tm.burn(tokens);
+        participants[msg.sender].tokens = 0; //revisar    
+        payable(address(this)).transfer(tokens*price);
+        max_tokens += tokens;
     }
 
     function getERC20() external view returns (address) {
@@ -116,10 +145,10 @@ contract QuadraticVoting {
     }
 
     //preguntar al profe manejo de array, se reservan posiciones que pueden no usarse 
-    function getPendingProposals() external view isOpen returns (uint[] memory){
-        uint [] memory pending_proposals = new uint[] (array_proposals.length);
-        uint index = 0;
-        for(uint i = 0; i < array_proposals.length; ++i){
+    function getPendingProposals() external view isOpen returns (uint256[] memory){
+        uint256 [] memory pending_proposals = new uint256[] (array_proposals.length);
+        uint256 index = 0;
+        for(uint256 i = 0; i < array_proposals.length; ++i){
             if(!proposals[array_proposals[i]].approved) {
                 pending_proposals[index] = array_proposals[i];
                 ++index;
@@ -128,10 +157,10 @@ contract QuadraticVoting {
         return pending_proposals;
     }
 
-    function getApprovedProposals() external view isOpen returns (uint[] memory){
-        uint [] memory approved_proposals = new uint[] (array_proposals.length);
-        uint index = 0;
-        for(uint i = 0; i < array_proposals.length; ++i){
+    function getApprovedProposals() external view isOpen returns (uint256[] memory){
+        uint256 [] memory approved_proposals = new uint256[] (array_proposals.length);
+        uint256 index = 0;
+        for(uint256 i = 0; i < array_proposals.length; ++i){
             if(proposals[array_proposals[i]].approved) {
                 approved_proposals[index] = array_proposals[i];
                 ++index;
@@ -140,10 +169,10 @@ contract QuadraticVoting {
         return approved_proposals;
     }
  
-    function getSignalingProposals() external view isOpen returns (uint[] memory){
-        uint [] memory signaling_proposals = new uint[] (array_proposals.length);
-        uint index = 0;
-        for(uint i = 0; i < array_proposals.length; ++i){
+    function getSignalingProposals() external view isOpen returns (uint256[] memory){
+        uint256 [] memory signaling_proposals = new uint256[] (array_proposals.length);
+        uint256 index = 0;
+        for(uint256 i = 0; i < array_proposals.length; ++i){
             if(proposals[array_proposals[i]].is_signaling) {
                 signaling_proposals[index] = array_proposals[i];
                 ++index;
@@ -153,20 +182,30 @@ contract QuadraticVoting {
     }
 
     //revisar que debe devolver y si estaria bien asi
-    function getProposalInfo(uint id) external view isOpen returns(string memory, string memory, uint, address) {
+    function getProposalInfo(uint256 id) external view isOpen returns(string memory, string memory, uint, address) {
         return (proposals[id].title, proposals[id].description, proposals[id].proposal_budget, proposals[id].proposal_address);
     }
 
-
-
-
-    //terminar estas 4 funciones
-    function stake(uint id, uint num_votes) external {
-
+    function stake(uint256 id, uint256 num_votes) external {
+        require(num_votes > 0, "The number of votes must be higher than zero");
+        uint256 tokens = (participants[msg.sender].votes[id] + num_votes)**2 - (participants[msg.sender].votes[id])**2;
+        require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote");
+        if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
+        participants[msg.sender].votes[id] += num_votes;
+        participants[msg.sender].tokens -= tokens;
+        tm.transferFrom(msg.sender, address(this), tokens);
+        proposals[id].num_tokens += tokens;
     }
 
-    function withdrawFromProposal() external{
-
+    function withdrawFromProposal(uint256 id, uint256 num_votes) external{
+        require(num_votes > 0, "The number of votes must be higher than zero");
+        require(!proposals[id].approved, "The proposal has been approved");
+        require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");
+        uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
+        tm.transferFrom(address(this), msg.sender, tokens);
+        participants[msg.sender].votes[id] -= num_votes;
+        participants[msg.sender].tokens += tokens;
+        proposals[id].num_tokens -= tokens;
     }
 
     function _checkAndExecuteProposal() internal {
