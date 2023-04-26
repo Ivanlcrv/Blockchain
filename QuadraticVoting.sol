@@ -73,7 +73,7 @@ contract QuadraticVoting {
     }
 
     modifier registeredParticipant {
-        require (participants[msg.sender].tokens >= 0, "You are not register as participant");
+        require (participants[msg.sender].tokens > 0, "You are not register as participant");
         _;
     }
 
@@ -88,20 +88,21 @@ contract QuadraticVoting {
         require(participants[msg.sender].tokens == 0, "Participant already exist");
         uint256 tokens = msg.value/price;
         //revisar estas dos lineas
-        require(tokens <= max_tokens);
+        require(tokens <= max_tokens, "The max of tokens has been reached");
         max_tokens -= tokens;
         //
+        require(tokens > 0, "You must deposit at least 1 token");
         tm.mint(msg.sender, tokens);
         participants[msg.sender].tokens = tokens; //revisar
         ++num_participants;
     }
 
-    function removeParticipant() external {
+    function removeParticipant() external registeredParticipant{
         uint256 tokens = participants[msg.sender].tokens;
         tm.transferFrom(msg.sender, address(this), tokens);
         tm.burn(tokens);
         participants[msg.sender].tokens = 0; //revisar    
-        payable(address(this)).transfer(tokens*price);
+        payable(msg.sender).transfer(tokens*price);
         --num_participants;
     }
 
@@ -151,7 +152,7 @@ contract QuadraticVoting {
         tm.transferFrom(msg.sender, address(this), tokens);
         tm.burn(tokens);
         participants[msg.sender].tokens = 0; //revisar    
-        payable(address(this)).transfer(tokens*price);
+        payable(msg.sender).transfer(tokens*price);
         max_tokens += tokens;
     }
 
@@ -211,8 +212,6 @@ contract QuadraticVoting {
         tm.transferFrom(msg.sender, address(this), tokens);
         proposals[id].num_tokens += tokens;
         proposals[id].votes += num_votes;
-        //completar, calcular umbral y comprobar condiciones
-        //duda diferencia entre totalbudget y condicion 1
         _checkAndExecuteProposal(id);
     }
 
@@ -221,6 +220,7 @@ contract QuadraticVoting {
         require(!proposals[id].approved, "The proposal has been approved");
         require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");
         uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
+        //duda de si se podria hacer el aprove aqui y en closeVoting y cancelProposal tm.approve(msg.sender, tokens);
         tm.transferFrom(address(this), msg.sender, tokens);
         participants[msg.sender].votes[id] -= num_votes;
         participants[msg.sender].tokens += tokens;
@@ -229,21 +229,25 @@ contract QuadraticVoting {
     }
 
     function _checkAndExecuteProposal(uint256 id) internal {
-        if(!proposals[id].is_signaling) {
-            uint256 threshold = (2 + (proposals[id].proposal_budget / (budget + tm.balanceOf(address(this)) * price))) * num_participants + num_pending_proposals * 10;
-            if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) || (proposals[id].votes*10) > threshold) {
-                //limitar consumo de gas a 10000 y enviar dinero en una llamada
-                Proposal(proposals[id].proposal_address).executeProposal(id, proposals[id].num_tokens, proposals[id].num_tokens);
-                proposals[id].approved = true;
-            }
-        }
-        else {
-            Proposal(proposals[id].proposal_address).executeProposal(id, proposals[id].num_tokens, proposals[id].num_tokens);
+        if(proposals[id].is_signaling || !is_open) {
+            Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
             proposals[id].approved = true;
+        }
+        //duda diferencia entre totalbudget y condicion 1
+        uint256 threshold = (2 + (proposals[id].proposal_budget / (budget + tm.balanceOf(address(this)) * price))) * num_participants + num_pending_proposals * 10;
+        if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) || (proposals[id].votes*10) > threshold) {
+            Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
+            proposals[id].approved = true;
+            budget += ((proposals[id].num_tokens * price) -proposals[id].proposal_budget);
         }
     }
 
     function closeVoting() external isOwnerContract{
+        payable(owner).transfer(budget);
+        lastId = 1;
+        num_participants = 0;
+        delete array_proposals;
+        is_open = false;
         for(uint256 j = 0; j < array_proposals.length; j++){
             uint256 id = array_proposals[j];
             if(!proposals[id].approved) {
@@ -258,10 +262,7 @@ contract QuadraticVoting {
                 }
             }
         }
-        payable(owner).transfer(budget);
-        lastId = 1;
-        num_participants = 0;
-        delete array_proposals;
-        is_open = false;
+        
     }
 }
+//si yo vendo todos mis tokens ya no existo como participante
