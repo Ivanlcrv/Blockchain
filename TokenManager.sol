@@ -10,7 +10,7 @@ contract TokenManager is ERC20 {
     constructor() ERC20("TokenManager", "Tm") {
         owner = msg.sender;
     }
-
+    //controlar quien puede ejecutar esta funcion
     function mint(address to, uint amount) external {
         _mint(to, amount);
     }

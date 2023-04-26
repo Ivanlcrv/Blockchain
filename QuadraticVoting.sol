@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.0;
 
-import "contracts/IExecutableProposal.sol";
-import "contracts/TokenManager.sol";
+import "TokenManager.sol";
+import "Proposal.sol";
 
 contract QuadraticVoting {
-    
+
     address owner;
     uint256 budget;
     uint256 price;
     uint256 max_tokens;
     uint256 lastId;
+    uint256 num_participants;
+    uint256 num_pending_proposals;
     bool is_open;
 
     TokenManager tm;
@@ -21,6 +23,7 @@ contract QuadraticVoting {
         string description;
         uint256 proposal_budget;
         uint256 num_tokens;
+        uint256 votes;
         address proposal_address;
         address creator;
         bool is_signaling;
@@ -44,6 +47,8 @@ contract QuadraticVoting {
         max_tokens = _max_tokens;
         is_open = false;
         lastId = 1;
+        num_participants = 0;
+        num_pending_proposals = 0;
         tm = new TokenManager();//revisar
     }
    
@@ -62,7 +67,7 @@ contract QuadraticVoting {
         _;
     }
 
-    modifier proposalCreater(uint256 id){
+    modifier proposalCreator(uint256 id){
         require (proposals[id].creator==msg.sender, "You are not the creater of this proposal");
         _;
     }
@@ -88,13 +93,16 @@ contract QuadraticVoting {
         //
         tm.mint(msg.sender, tokens);
         participants[msg.sender].tokens = tokens; //revisar
+        ++num_participants;
     }
 
     function removeParticipant() external {
         uint256 tokens = participants[msg.sender].tokens;
+        tm.transferFrom(msg.sender, address(this), tokens);
         tm.burn(tokens);
         participants[msg.sender].tokens = 0; //revisar    
         payable(address(this)).transfer(tokens*price);
+        --num_participants;
     }
 
     function addProposal(string memory title, string memory description, uint256 proposal_budget, address a) external isOpen returns (uint){
@@ -103,16 +111,21 @@ contract QuadraticVoting {
         proposals[lastId].description = description;
         proposals[lastId].proposal_budget = proposal_budget;
         proposals[lastId].num_tokens = 0;
+        proposals[lastId].votes = 0;
         proposals[lastId].proposal_address = a;
         proposals[lastId].creator = msg.sender;
-        proposals[lastId].is_signaling = (proposal_budget==0 ? false : true);
+        if(proposal_budget == 0) proposals[lastId].is_signaling = true;
+        else {
+            proposals[lastId].is_signaling = false;
+            ++num_pending_proposals;
+        }
         proposals[lastId].approved = false;
         proposals_aux[a] = lastId;
         array_proposals.push(lastId);
         return lastId++;
     }
     
-    function cancelProposal (uint256 id) external isOpen isApproved(id) {
+    function cancelProposal (uint256 id) external isOpen isApproved(id) proposalCreator(id) {
         for(uint i = 0; i < proposals[id].voters.length; i++){
             uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
             tm.transferFrom(address(this), msg.sender, tokens);
@@ -120,6 +133,7 @@ contract QuadraticVoting {
             participants[msg.sender].tokens += tokens;
             proposals[id].num_tokens -= tokens;
         }
+        if(!proposals[id].is_signaling) --num_pending_proposals;
     }
 
     function buyTokens() external payable registeredParticipant {
@@ -134,6 +148,7 @@ contract QuadraticVoting {
 
     function sellTokens() external registeredParticipant {
         uint256 tokens = participants[msg.sender].tokens;
+        tm.transferFrom(msg.sender, address(this), tokens);
         tm.burn(tokens);
         participants[msg.sender].tokens = 0; //revisar    
         payable(address(this)).transfer(tokens*price);
@@ -195,6 +210,10 @@ contract QuadraticVoting {
         participants[msg.sender].tokens -= tokens;
         tm.transferFrom(msg.sender, address(this), tokens);
         proposals[id].num_tokens += tokens;
+        proposals[id].votes += num_votes;
+        //completar, calcular umbral y comprobar condiciones
+        //duda diferencia entre totalbudget y condicion 1
+        _checkAndExecuteProposal(id);
     }
 
     function withdrawFromProposal(uint256 id, uint256 num_votes) external{
@@ -206,13 +225,43 @@ contract QuadraticVoting {
         participants[msg.sender].votes[id] -= num_votes;
         participants[msg.sender].tokens += tokens;
         proposals[id].num_tokens -= tokens;
+        proposals[id].votes -= num_votes;
     }
 
-    function _checkAndExecuteProposal() internal {
-
+    function _checkAndExecuteProposal(uint256 id) internal {
+        if(!proposals[id].is_signaling) {
+            uint256 threshold = (2 + (proposals[id].proposal_budget / (budget + tm.balanceOf(address(this)) * price))) * num_participants + num_pending_proposals * 10;
+            if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) || (proposals[id].votes*10) > threshold) {
+                //limitar consumo de gas a 10000 y enviar dinero en una llamada
+                Proposal(proposals[id].proposal_address).executeProposal(id, proposals[id].num_tokens, proposals[id].num_tokens);
+                proposals[id].approved = true;
+            }
+        }
+        else {
+            Proposal(proposals[id].proposal_address).executeProposal(id, proposals[id].num_tokens, proposals[id].num_tokens);
+            proposals[id].approved = true;
+        }
     }
 
     function closeVoting() external isOwnerContract{
+        for(uint256 j = 0; j < array_proposals.length; j++){
+            uint256 id = array_proposals[j];
+            if(!proposals[id].approved) {
+                if(proposals[id].is_signaling) _checkAndExecuteProposal(id);
+                else --num_pending_proposals;
+                for(uint i = 0; i < proposals[id].voters.length; i++){
+                    uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
+                    tm.transferFrom(address(this), msg.sender, tokens);
+                    participants[msg.sender].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
+                    participants[msg.sender].tokens += tokens;
+                    proposals[id].num_tokens -= tokens;
+                }
+            }
+        }
+        payable(owner).transfer(budget);
+        lastId = 1;
+        num_participants = 0;
+        delete array_proposals;
         is_open = false;
     }
 }
