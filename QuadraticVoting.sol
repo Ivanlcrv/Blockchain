@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.0;
 
-import "contracts/TokenManager.sol";
-import "contracts/Proposal.sol";
+import "TokenManager.sol";
+import "Proposal.sol";
 
 contract QuadraticVoting {
 
@@ -76,6 +76,7 @@ contract QuadraticVoting {
 
 
     function openVoting() external payable isOwnerContract {
+        require(msg.value > 0, "You must open the voting with any budget");
         budget = msg.value;
         is_open = true;
     }
@@ -122,10 +123,9 @@ contract QuadraticVoting {
     function cancelProposal (uint256 id) external isOpen isApproved(id) proposalCreator(id) {
         for(uint i = 0; i < proposals[id].voters.length; i++){
             uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
-            tm.approve(msg.sender, tokens);
-            tm.transferFrom(address(this), msg.sender, tokens);
-            participants[msg.sender].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
-            participants[msg.sender].tokens += tokens;
+            tm.transfer(proposals[id].voters[i], tokens);
+            participants[proposals[id].voters[i]].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
+            participants[proposals[id].voters[i]].tokens += tokens;
             proposals[id].num_tokens -= tokens;
         }
         if(!proposals[id].is_signaling) --num_pending_proposals;
@@ -201,6 +201,7 @@ contract QuadraticVoting {
 
     function stake(uint256 id, uint256 num_votes) external {
         require(num_votes > 0, "The number of votes must be higher than zero");
+        require(!proposals[id].approved, "The proposal has been approved");
         uint256 tokens = (participants[msg.sender].votes[id] + num_votes)**2 - (participants[msg.sender].votes[id])**2;
         require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote");
         if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
@@ -217,8 +218,7 @@ contract QuadraticVoting {
         require(!proposals[id].approved, "The proposal has been approved");
         require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");
         uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
-        tm.approve(msg.sender, tokens);
-        tm.transferFrom(address(this), msg.sender, tokens);
+        tm.transfer(msg.sender, tokens);
         participants[msg.sender].votes[id] -= num_votes;
         participants[msg.sender].tokens += tokens;
         proposals[id].num_tokens -= tokens;
@@ -230,11 +230,14 @@ contract QuadraticVoting {
             Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
             proposals[id].approved = true;
         }
-        uint256 threshold = (2 + (proposals[id].proposal_budget / (budget * price))) * num_participants + num_pending_proposals * 10;
+        uint256 threshold;
+        if(budget != 0) threshold = (2 + (proposals[id].proposal_budget / (budget * price))) * num_participants + num_pending_proposals * 10;
+        else threshold = num_pending_proposals;
         if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) && (proposals[id].votes*10) > threshold) {
             Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget, gas:10000}(id, proposals[id].num_tokens, proposals[id].num_tokens);
             proposals[id].approved = true;
-            budget += ((proposals[id].num_tokens * price) -proposals[id].proposal_budget);
+            budget += (proposals[id].num_tokens * price);
+            budget -= proposals[id].proposal_budget;
         }
     }
 
@@ -251,10 +254,9 @@ contract QuadraticVoting {
                 else --num_pending_proposals;
                 for(uint i = 0; i < proposals[id].voters.length; i++){
                     uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
-                    tm.approve(msg.sender, tokens);
-                    tm.transferFrom(address(this), msg.sender, tokens);
-                    participants[msg.sender].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
-                    participants[msg.sender].tokens += tokens;
+                    tm.transfer(proposals[id].voters[i], tokens);
+                    participants[proposals[id].voters[i]].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
+                    participants[proposals[id].voters[i]].tokens += tokens;
                     proposals[id].num_tokens -= tokens;
                 }
             }
