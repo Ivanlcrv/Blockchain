@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.0;
 
-import "TokenManager.sol";
-import "Proposal.sol";
+import "contracts/TokenManager.sol";
+import "contracts/Proposal.sol";
 
 contract QuadraticVoting {
 
@@ -24,17 +24,17 @@ contract QuadraticVoting {
         uint256 votes;
         address proposal_address;
         address creator;
-        bool is_signaling;
         bool approved;
         address[] voters;
     }
 
     struct Paticipant {
-        uint256 tokens;
+        uint248 tokens;
+        uint8 exist;
         mapping (uint256 => uint256) votes;
     }
 
-    mapping (address => uint256) proposals_aux;//revisar
+    mapping (address => uint256) proposals_aux;
     mapping (address => Paticipant) participants;
     mapping (uint256 => proposal) proposals;
     uint256 [] array_proposals;
@@ -46,7 +46,7 @@ contract QuadraticVoting {
         lastId = 1;
         num_participants = 0;
         num_pending_proposals = 0;
-        tm = new TokenManager(_max_tokens);//revisar
+        tm = new TokenManager(_max_tokens);
     }
    
     modifier isOwnerContract{
@@ -70,7 +70,7 @@ contract QuadraticVoting {
     }
 
     modifier registeredParticipant {
-        require (participants[msg.sender].tokens > 0, "You are not register as participant");
+        require (participants[msg.sender].exist == 1, "You are not register as participant");
         _;
     }
 
@@ -82,26 +82,22 @@ contract QuadraticVoting {
     }
 
     function addParticipant() external payable {
-        //revisar
-        require(participants[msg.sender].tokens == 0, "Participant already exist");
+        require(participants[msg.sender].exist == 0, "Participant already exist");
         uint256 tokens = msg.value/price;
         require(tokens > 0, "You must deposit at least 1 token");
         tm.mint(msg.sender, tokens);
-        participants[msg.sender].tokens = tokens; //revisar
+        participants[msg.sender].tokens = uint248(tokens);
+        participants[msg.sender].exist = 1;
         ++num_participants;
     }
 
     function removeParticipant() external registeredParticipant{
-        uint256 tokens = participants[msg.sender].tokens;
-        tm.transferFrom(msg.sender, address(this), tokens);
-        tm.burn(tokens);
-        participants[msg.sender].tokens = 0; //revisar    
-        payable(msg.sender).transfer(tokens*price);
+        participants[msg.sender].exist = 0;
         --num_participants;
     }
 
     function addProposal(string memory title, string memory description, uint256 proposal_budget, address a) external isOpen returns (uint){
-        require (proposals_aux[a] == 0, "This proposal already exists");
+        require (a != address(0), "This proposal don't exists");
         proposals[lastId].title = title;
         proposals[lastId].description = description;
         proposals[lastId].proposal_budget = proposal_budget;
@@ -109,39 +105,36 @@ contract QuadraticVoting {
         proposals[lastId].votes = 0;
         proposals[lastId].proposal_address = a;
         proposals[lastId].creator = msg.sender;
-        if(proposal_budget == 0) proposals[lastId].is_signaling = true;
-        else {
-            proposals[lastId].is_signaling = false;
-            ++num_pending_proposals;
-        }
+        if(proposal_budget != 0) ++num_pending_proposals;
         proposals[lastId].approved = false;
         proposals_aux[a] = lastId;
         array_proposals.push(lastId);
+        //se devuelve el lastId y tras devolverse se incrementa su valor
         return lastId++;
     }
     
     function cancelProposal (uint256 id) external isOpen isApproved(id) proposalCreator(id) {
         for(uint i = 0; i < proposals[id].voters.length; i++){
             uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
-            tm.transfer(proposals[id].voters[i], tokens);
             participants[proposals[id].voters[i]].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
-            participants[proposals[id].voters[i]].tokens += tokens;
+            participants[proposals[id].voters[i]].tokens += uint248(tokens);
             proposals[id].num_tokens -= tokens;
+            tm.transfer(proposals[id].voters[i], tokens);
         }
-        if(!proposals[id].is_signaling) --num_pending_proposals;
+        if(proposals[id].proposal_budget != 0) --num_pending_proposals;
     }
 
     function buyTokens() external payable registeredParticipant {
         uint256 tokens = msg.value/price;
         tm.mint(msg.sender, tokens);
-        participants[msg.sender].tokens += tokens; //revisar
+        participants[msg.sender].tokens += uint248(tokens);
     }
 
     function sellTokens() external registeredParticipant {
         uint256 tokens = participants[msg.sender].tokens;
         tm.transferFrom(msg.sender, address(this), tokens);
         tm.burn(tokens);
-        participants[msg.sender].tokens = 0; //revisar    
+        participants[msg.sender].tokens = 0;
         payable(msg.sender).transfer(tokens*price);
     }
 
@@ -150,18 +143,15 @@ contract QuadraticVoting {
     }
 
     function getPendingProposals() external view isOpen returns (uint256[] memory){
-        uint256 [] memory pending_proposals = new uint256[] (array_proposals.length);
+        uint256 [] memory pending_proposals = new uint256[] (num_pending_proposals);
         uint256 index = 0;
         for(uint256 i = 0; i < array_proposals.length; ++i){
-            if(!proposals[array_proposals[i]].approved) {
+            if(!proposals[array_proposals[i]].approved && proposals[array_proposals[i]].proposal_budget != 0) {
                 pending_proposals[index] = array_proposals[i];
                 ++index;
             }
         }
-        uint256[] memory result = new uint256[](index);
-        for (uint256 i = 0; i < index; ++i) result[i] = pending_proposals[i];
-        assembly{mstore(result,index)}
-        return result;
+        return pending_proposals;
     }
 
     function getApprovedProposals() external view isOpen returns (uint256[] memory){
@@ -183,7 +173,7 @@ contract QuadraticVoting {
         uint256 [] memory signaling_proposals = new uint256[] (array_proposals.length);
         uint256 index = 0;
         for(uint256 i = 0; i < array_proposals.length; ++i){
-            if(proposals[array_proposals[i]].is_signaling) {
+            if(proposals[array_proposals[i]].proposal_budget == 0) {
                 signaling_proposals[index] = array_proposals[i];
                 ++index;
             }
@@ -194,7 +184,6 @@ contract QuadraticVoting {
         return result;
     }
 
-    //revisar que debe devolver y si estaria bien asi
     function getProposalInfo(uint256 id) external view isOpen returns(string memory, string memory, uint, address) {
         return (proposals[id].title, proposals[id].description, proposals[id].proposal_budget, proposals[id].proposal_address);
     }
@@ -206,10 +195,10 @@ contract QuadraticVoting {
         require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote");
         if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
         participants[msg.sender].votes[id] += num_votes;
-        participants[msg.sender].tokens -= tokens;
-        tm.transferFrom(msg.sender, address(this), tokens);
+        participants[msg.sender].tokens -= uint248(tokens);
         proposals[id].num_tokens += tokens;
         proposals[id].votes += num_votes;
+        tm.transferFrom(msg.sender, address(this), tokens);
         _checkAndExecuteProposal(id);
     }
 
@@ -218,20 +207,20 @@ contract QuadraticVoting {
         require(!proposals[id].approved, "The proposal has been approved");
         require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");
         uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
-        tm.transfer(msg.sender, tokens);
         participants[msg.sender].votes[id] -= num_votes;
-        participants[msg.sender].tokens += tokens;
+        participants[msg.sender].tokens += uint248(tokens);
         proposals[id].num_tokens -= tokens;
         proposals[id].votes -= num_votes;
+        tm.transfer(msg.sender, tokens);
     }
 
     function _checkAndExecuteProposal(uint256 id) internal {
-        if(proposals[id].is_signaling || !is_open) {
+        if(proposals[id].proposal_budget == 0 && !is_open) {
             Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
             proposals[id].approved = true;
         }
         uint256 threshold;
-        if(budget != 0) threshold = (2 + (proposals[id].proposal_budget / (budget * price))) * num_participants + num_pending_proposals * 10;
+        if(budget != 0) threshold = (2 * num_participants + ((proposals[id].proposal_budget * num_participants) / (budget * price))) + num_pending_proposals * 10;
         else threshold = num_pending_proposals;
         if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) && (proposals[id].votes*10) > threshold) {
             Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget, gas:10000}(id, proposals[id].num_tokens, proposals[id].num_tokens);
@@ -242,26 +231,25 @@ contract QuadraticVoting {
     }
 
     function closeVoting() external isOwnerContract{
+        for(uint256 j = 0; j < array_proposals.length; j++){
+            uint256 id = array_proposals[j];
+            if(!proposals[id].approved) {
+                if(proposals[id].proposal_budget == 0) _checkAndExecuteProposal(id);
+                else --num_pending_proposals;
+                for(uint i = 0; i < proposals[id].voters.length; i++){
+                    uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
+                    participants[proposals[id].voters[i]].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
+                    participants[proposals[id].voters[i]].tokens += uint248(tokens);
+                    proposals[id].num_tokens -= tokens;
+                    tm.transfer(proposals[id].voters[i], tokens);
+                }
+            }
+            delete proposals[id];
+        }
         payable(owner).transfer(budget);
         lastId = 1;
         num_participants = 0;
         delete array_proposals;
         is_open = false;
-        for(uint256 j = 0; j < array_proposals.length; j++){
-            uint256 id = array_proposals[j];
-            if(!proposals[id].approved) {
-                if(proposals[id].is_signaling) _checkAndExecuteProposal(id);
-                else --num_pending_proposals;
-                for(uint i = 0; i < proposals[id].voters.length; i++){
-                    uint256 tokens = participants[proposals[id].voters[i]].votes[id]**2;
-                    tm.transfer(proposals[id].voters[i], tokens);
-                    participants[proposals[id].voters[i]].votes[id] -=  participants[proposals[id].voters[i]].votes[id];
-                    participants[proposals[id].voters[i]].tokens += tokens;
-                    proposals[id].num_tokens -= tokens;
-                }
-            }
-        }
-        
     }
 }
-//si yo vendo todos mis tokens ya no existo como participante
