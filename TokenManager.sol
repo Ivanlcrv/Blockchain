@@ -25,7 +25,7 @@ contract TokenManager is ERC20 {
         total_supply += amount;
     }
 
-    function burn(uint amount) external {
+    function burn(uint amount) external isOwnerContract {
         _burn(msg.sender, amount);
         total_supply -= amount;
     }
