@@ -50,44 +50,44 @@ contract QuadraticVoting {
     }
     // Modificador para comprobar si votas/retiras mas de 0 votos
     modifier enoughVotes (uint256 num_votes){
-        require(num_votes > 0);
+        require(num_votes > 0, "The number of votes must be higher than zero");
         _;
     }
-    // Modificador para comprobar si es el duenho del contrato
+    // Modificador para comprobar si es el dueno del contrato
     modifier isOwnerContract{
-        require (owner==msg.sender);
+        require (owner==msg.sender, "You are not the owner");
         _;
     }
     // Modificador para comprobar si la votacion esta abierta
     modifier isOpen{
-        require (is_open==true);
+        require (is_open==true, "The voting is not open");
         _;
     }
     //Modificador para compronar si una propuesta esta aprobada
     modifier isApproved(uint256 id){
-        require (!proposals[id].approved);
+        require (!proposals[id].approved, "The proposal has been approved");
         _;
     }
     //Modificador para comprobar si es el creador de la propuesta
     modifier proposalCreator(uint256 id){
-        require (proposals[id].creator==msg.sender);
+        require (proposals[id].creator==msg.sender, "You are not the creator of this proposal");
         _;
     }
     //Modificador para comprobar si existe un participante
     modifier registeredParticipant {
-        require (participants[msg.sender].exist == 1);
+        require (participants[msg.sender].exist == 1, "You are not register as participant");
         _;
     }
 
 
     function openVoting() external payable isOwnerContract {
-        require(msg.value > 0); //Necesitas abrir el proceso de votacion con un presupuesto
+        require(msg.value > 0, "You must open the voting with any budget"); //Necesitas abrir el proceso de votación con un presupuesto
         budget = msg.value;
         is_open = true;
     }
 
     function addParticipant() external payable {
-        require(participants[msg.sender].exist == 0);  //El participante existe
+        require(participants[msg.sender].exist == 0, "Participant already exist");  //El participante existe
         uint256 tokens = msg.value/price;
         require(tokens > 0);   //Necesitas depositar al menos 1 token
         tm.mint(msg.sender, tokens);            //Se minan los tokens correspondientes
@@ -102,7 +102,7 @@ contract QuadraticVoting {
     }
 
     function addProposal(string memory title, string memory description, uint256 proposal_budget, address a) external isOpen returns (uint){
-        require (a != address(0));    //La propuesta no existe
+        require (a != address(0), "This proposal doesn't exist");    //La propuesta no existe
         proposals[lastId].title = title;
         proposals[lastId].description = description;
         proposals[lastId].proposal_budget = proposal_budget;
@@ -131,7 +131,7 @@ contract QuadraticVoting {
 
     function buyTokens() external payable registeredParticipant {
         uint256 tokens = msg.value/price;
-        tm.mint(msg.sender, tokens); //Minamos tokens y se lo anhadimos al participante
+        tm.mint(msg.sender, tokens); //Minamos tokens y se lo anadimos al participante
         participants[msg.sender].tokens += uint248(tokens);
     }
 
@@ -195,7 +195,7 @@ contract QuadraticVoting {
 
     function stake(uint256 id, uint256 num_votes) external enoughVotes(num_votes) isApproved(id){
         uint256 tokens = (participants[msg.sender].votes[id] + num_votes)**2 - (participants[msg.sender].votes[id])**2;
-        require (participants[msg.sender].tokens >= tokens);    //No tiene tokens para votar
+        require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote");    //No tiene tokens para votar
         if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
         participants[msg.sender].votes[id] += num_votes;
         participants[msg.sender].tokens -= uint248(tokens);
@@ -206,7 +206,7 @@ contract QuadraticVoting {
     }
 
     function withdrawFromProposal(uint256 id, uint256 num_votes) external enoughVotes(num_votes) isApproved(id){
-        require(participants[msg.sender].votes[id] >= num_votes);   //No tiene los votos para retirarlos
+        require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");   //No tiene los votos para retirarlos
         uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
         participants[msg.sender].votes[id] -= num_votes;
         participants[msg.sender].tokens += uint248(tokens);
