@@ -63,11 +63,6 @@ contract QuadraticVoting {
         require (is_open==true, "The voting is not open");
         _;
     }
-    // Modificador para comprobar si la votacion no esta abierta
-    modifier isNotOpen{
-        require (is_open==false, "The voting is not open");
-        _;
-    }
     //Modificador para compronar si una propuesta esta aprobada
     modifier isApproved(uint256 id){
         require (!proposals[id].approved, "The proposal has been approved");
@@ -135,6 +130,7 @@ contract QuadraticVoting {
     }
 
     function buyTokens() external payable registeredParticipant {
+        require (msg.value>=price, "You cannot buy tokens with that price");
         uint256 tokens = msg.value/price;
         tm.mint(msg.sender, tokens); //Minamos tokens y se lo anadimos al participante
         participants[msg.sender].tokens += uint248(tokens);
@@ -228,24 +224,28 @@ contract QuadraticVoting {
     }
 
     function _checkAndExecuteProposal(uint256 id) internal {
-        if(proposals[id].proposal_budget == 0 && !is_open) {
-            Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
+        if(proposals[id].proposal_budget == 0) {
+            if(!is_open) {
+                Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget}(id, proposals[id].num_tokens, proposals[id].num_tokens);
             proposals[id].approved = true;
+            }
         }
-        uint256 threshold;
-        if(budget != 0) threshold = (2 * num_participants + ((proposals[id].proposal_budget * num_participants) / (budget * price))) + num_pending_proposals * 10;  //Calculo de umbral
-        else threshold = num_pending_proposals;
-        if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) && (proposals[id].votes*10) > threshold) {
-            Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget, gas:10000}(id, proposals[id].num_tokens, proposals[id].num_tokens);
-            proposals[id].approved = true;
-            budget += (proposals[id].num_tokens * price);
-            budget -= proposals[id].proposal_budget;
-            --num_pending_proposals;
-            tm.burn(proposals[id].num_tokens);
+        else {
+            uint256 threshold;
+            if(budget != 0) threshold = (2 * num_participants + ((proposals[id].proposal_budget * num_participants) / (budget * price))) + num_pending_proposals * 10;  //Calculo de umbral
+            else threshold = num_pending_proposals;
+            if(proposals[id].proposal_budget <= budget + (proposals[id].num_tokens * price) && (proposals[id].votes*10) > threshold) {
+                Proposal(proposals[id].proposal_address).executeProposal{value: proposals[id].proposal_budget, gas:10000}(id, proposals[id].num_tokens, proposals[id].num_tokens);
+                proposals[id].approved = true;
+                budget += (proposals[id].num_tokens * price);
+                budget -= proposals[id].proposal_budget;
+                --num_pending_proposals;
+                tm.burn(proposals[id].num_tokens);
+            }
         }
     }
 
-    function closeVoting() external isOwnerContract{
+    function closeVoting() external isOwnerContract isOpen{
         for(uint256 j = 0; j < array_proposals.length; j++){
             uint256 id = array_proposals[j];
             if(!proposals[id].approved) {
