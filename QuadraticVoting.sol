@@ -63,6 +63,11 @@ contract QuadraticVoting {
         require (is_open==true, "The voting is not open");
         _;
     }
+    // Modificador para comprobar si la votacion no esta abierta
+    modifier isNotOpen{
+        require (is_open==false, "The voting is not open");
+        _;
+    }
     //Modificador para compronar si una propuesta esta aprobada
     modifier isApproved(uint256 id){
         require (!proposals[id].approved, "The proposal has been approved");
@@ -193,20 +198,27 @@ contract QuadraticVoting {
         return (proposals[id].title, proposals[id].description, proposals[id].proposal_budget, proposals[id].proposal_address); //Damos solo la informacion basica
     }
 
-    function stake(uint256 id, uint256 num_votes) external enoughVotes(num_votes) isApproved(id){
+    function stake(uint256 id, uint256 num_votes) external enoughVotes(num_votes) registeredParticipant {
         uint256 tokens = (participants[msg.sender].votes[id] + num_votes)**2 - (participants[msg.sender].votes[id])**2;
-        require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote");    //No tiene tokens para votar
-        if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
-        participants[msg.sender].votes[id] += num_votes;
-        participants[msg.sender].tokens -= uint248(tokens);
-        proposals[id].num_tokens += tokens;
-        proposals[id].votes += num_votes;
-        tm.transferFrom(msg.sender, address(this), tokens);
-        _checkAndExecuteProposal(id);
+        require (participants[msg.sender].tokens >= tokens, "You don't have enough token to vote"); //No tiene tokens para votar
+        if(proposals[id].approved){
+            budget += (tokens * price);
+            participants[msg.sender].tokens -= uint248(tokens);
+            tm.transferFrom(msg.sender, address(this), tokens);
+        }
+        else{
+            if(participants[msg.sender].votes[id] == 0) proposals[id].voters.push(msg.sender);
+            participants[msg.sender].votes[id] += num_votes;
+            participants[msg.sender].tokens -= uint248(tokens);
+            proposals[id].num_tokens += tokens;
+            proposals[id].votes += num_votes;
+            tm.transferFrom(msg.sender, address(this), tokens);
+            _checkAndExecuteProposal(id);
+        }
     }
 
-    function withdrawFromProposal(uint256 id, uint256 num_votes) external enoughVotes(num_votes) isApproved(id){
-        require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw");   //No tiene los votos para retirarlos
+    function withdrawFromProposal(uint256 id, uint256 num_votes) external enoughVotes(num_votes) registeredParticipant isApproved(id) {
+        require(participants[msg.sender].votes[id] >= num_votes, "You don't have enough votes to withdraw"); //No tiene los votos para retirarlos
         uint256 tokens = (participants[msg.sender].votes[id])**2 - (participants[msg.sender].votes[id] - num_votes)**2;
         participants[msg.sender].votes[id] -= num_votes;
         participants[msg.sender].tokens += uint248(tokens);
@@ -228,6 +240,8 @@ contract QuadraticVoting {
             proposals[id].approved = true;
             budget += (proposals[id].num_tokens * price);
             budget -= proposals[id].proposal_budget;
+            --num_pending_proposals;
+            tm.burn(proposals[id].num_tokens);
         }
     }
 
